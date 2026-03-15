@@ -3,7 +3,7 @@ name = "egui-template"
 version = "0.1.0"
 authors = ["Emil Ernerfeldt <emil.ernerfeldt@gmail.com>"]
 edition = "2021"
-rust-version = "1.77.2"
+rust-version = "1.72"
 # .cargo/config.toml
 
 
