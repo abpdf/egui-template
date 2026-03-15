@@ -23,54 +23,53 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-build:
-  name: Build (${{ matrix.os }})
-  needs: create-release
-  runs-on: ${{ matrix.os }}
-  strategy:
-    matrix:
-      os: [ubuntu-latest, windows-latest, macos-latest]
-      include:
-        - os: ubuntu-latest
-          artifact_name: egui-template          # 构建生成的文件名
-          asset_name: egui-template-linux-amd64 # 上传后的附件名
-          rust_version: stable
-        - os: windows-latest
-          artifact_name: egui-template.exe
-          asset_name: egui-template-windows-amd64.exe
-          rust_version: 1.77.2
-        - os: macos-latest
-          artifact_name: egui-template
-          asset_name: egui-template-macos-amd64
-          rust_version: stable
+  build:
+    name: Build (${{ matrix.os }})
+    needs: create-release
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        include:
+          - os: ubuntu-latest
+            artifact_name: egui-template          # 构建生成的文件名
+            asset_name: egui-template-linux-amd64 # 上传后的附件名
+            rust_version: stable
+          - os: windows-latest
+            artifact_name: egui-template.exe
+            asset_name: egui-template-windows-amd64.exe
+            rust_version: 1.77.2
+          - os: macos-latest
+            artifact_name: egui-template
+            asset_name: egui-template-macos-amd64
+            rust_version: stable
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-  steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ matrix.rust_version }}
 
-    - name: Install Rust toolchain
-      uses: dtolnay/rust-toolchain@stable
-      with:
-        toolchain: ${{ matrix.rust_version }}
+      - name: Build release
+        run: cargo build --release --verbose
 
-    - name: Build release
-      run: cargo build --release --verbose
+      # 重命名构建产物为唯一的附件名（Windows 用 copy，其他用 cp）
+      - name: Rename asset (Windows)
+        if: matrix.os == 'windows-latest'
+        run: copy target\release\${{ matrix.artifact_name }} target\release\${{ matrix.asset_name }}
+        shell: cmd
 
-    # 重命名构建产物为唯一的附件名（Windows 用 copy，其他用 cp）
-    - name: Rename asset (Windows)
-      if: matrix.os == 'windows-latest'
-      run: copy target\release\${{ matrix.artifact_name }} target\release\${{ matrix.asset_name }}
-      shell: cmd
+      - name: Rename asset (Linux/macOS)
+        if: matrix.os != 'windows-latest'
+        run: cp target/release/${{ matrix.artifact_name }} target/release/${{ matrix.asset_name }}
 
-    - name: Rename asset (Linux/macOS)
-      if: matrix.os != 'windows-latest'
-      run: cp target/release/${{ matrix.artifact_name }} target/release/${{ matrix.asset_name }}
-
-    # 上传重命名后的文件（使用 tag_name 定位 release）
-    - name: Upload Release Asset
-      uses: softprops/action-gh-release@v1
-      with:
-        tag_name: ${{ github.ref_name }}
-        files: target/release/${{ matrix.asset_name }}
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # 上传重命名后的文件（使用 tag_name 定位 release）
+      - name: Upload Release Asset
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: target/release/${{ matrix.asset_name }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
