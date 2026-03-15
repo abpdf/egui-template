@@ -26,7 +26,7 @@ fn main() -> eframe::Result<()> {
         native_options,
         Box::new(|cc| {
             app::setup_custom_fonts(&cc.egui_ctx);
-            Box::new(eframe_template::TemplateApp::new(cc))}
+            Box::new(egui_template::TemplateApp::new(cc))}
         ),
     )
 }
