@@ -18,7 +18,6 @@ fn main() -> eframe::Result<()> {
                 eframe::icon_data::from_png_bytes(&include_bytes!("../assets/icon-256.png")[..])
                     .unwrap(),
             ),
-        persist_window: false,
         ..Default::default()
     };
     {
