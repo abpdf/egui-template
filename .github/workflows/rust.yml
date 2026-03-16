@@ -24,46 +24,83 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build:
-    name: Build (${{ matrix.os }})
+    name: Build (${{ matrix.os }} - ${{ matrix.target }})
     needs: create-release
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        # 同时构建 x64 和 ARM64 架构
-        os:
-          - ubuntu-latest        # x64
-          - windows-latest       # x64
-          - macos-13             # x64 (Intel)
-          - ubuntu-24.04-arm     # ARM64
-          - windows-11-arm       # ARM64
-          - macos-14             # ARM64 (Apple Silicon)
         include:
-          # x64 架构配置
+          # Linux x86_64 (AMD64)
           - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
             artifact_name: egui-template
             asset_name: egui-template-linux-amd64
             rust_version: stable
-          - os: windows-latest
-            artifact_name: egui-template.exe
-            asset_name: egui-template-windows-amd64.exe
-            rust_version: 1.77.2
-          - os: macos-13
-            artifact_name: egui-template
-            asset_name: egui-template-macos-amd64
-            rust_version: stable
-          # ARM64 架构配置
+          
+          # Linux ARM64
           - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
             artifact_name: egui-template
             asset_name: egui-template-linux-arm64
             rust_version: stable
+          
+          # Linux x86 32-bit
+          - os: ubuntu-latest
+            target: i686-unknown-linux-gnu
+            artifact_name: egui-template
+            asset_name: egui-template-linux-x86
+            rust_version: stable
+          
+          # Linux ARM 32-bit (ARMv7)
+          - os: ubuntu-latest
+            target: armv7-unknown-linux-gnueabihf
+            artifact_name: egui-template
+            asset_name: egui-template-linux-armv7
+            rust_version: stable
+          
+          # Windows x86_64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: egui-template.exe
+            asset_name: egui-template-windows-amd64.exe
+            rust_version: 1.77.2
+          
+          # Windows ARM64
           - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
             artifact_name: egui-template.exe
             asset_name: egui-template-windows-arm64.exe
-            rust_version: 1.77.2   # 可根据需要改为 stable
+            rust_version: 1.77.2
+          
+          # Windows x86 32-bit
+          - os: windows-latest
+            target: i686-pc-windows-msvc
+            artifact_name: egui-template.exe
+            asset_name: egui-template-windows-x86.exe
+            rust_version: 1.77.2
+          
+          # macOS Intel (AMD64)
+          - os: macos-13
+            target: x86_64-apple-darwin
+            artifact_name: egui-template
+            asset_name: egui-template-macos-amd64
+            rust_version: stable
+          
+          # macOS ARM64 (Apple Silicon)
           - os: macos-14
+            target: aarch64-apple-darwin
             artifact_name: egui-template
             asset_name: egui-template-macos-arm64
             rust_version: stable
+          
+          # macOS x86 32-bit (理论上macOS已不再支持32-bit，但为了完整性添加)
+          # 注意：macOS Catalina (10.15) 是最后一个支持32位应用的版本
+          # - os: macos-13
+          #   target: i686-apple-darwin
+          #   artifact_name: egui-template
+          #   asset_name: egui-template-macos-x86
+          #   rust_version: stable
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -72,25 +109,68 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: ${{ matrix.rust_version }}
+          targets: ${{ matrix.target }}
+
+      # 为Linux 32-bit和ARM交叉编译安装必要的依赖
+      - name: Install cross-compilation dependencies (Linux x86)
+        if: matrix.target == 'i686-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-multilib
+          
+      - name: Install cross-compilation dependencies (Linux ARMv7)
+        if: matrix.target == 'armv7-unknown-linux-gnueabihf'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-linux-gnueabihf
+          echo "CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc" >> $GITHUB_ENV
+
+      # 为Windows 32-bit交叉编译安装依赖
+      - name: Install Windows 32-bit dependencies
+        if: matrix.target == 'i686-pc-windows-msvc' && matrix.os == 'windows-latest'
+        run: |
+          # Windows 32-bit 工具链通常已包含在Visual Studio中
+          echo "Building for Windows 32-bit"
 
       - name: Build release
-        run: cargo build --release --verbose
+        run: cargo build --release --verbose --target ${{ matrix.target }}
+        
+      # 处理构建产物位置（默认在 target/release 下，交叉编译在 target/<target>/release 下）
+      - name: Locate binary (Linux/macOS)
+        if: matrix.os != 'windows-latest' && matrix.os != 'windows-11-arm'
+        run: |
+          if [ -f "target/${{ matrix.target }}/release/${{ matrix.artifact_name }}" ]; then
+            cp target/${{ matrix.target }}/release/${{ matrix.artifact_name }} target/${{ matrix.artifact_name }}
+          fi
+          
+      - name: Locate binary (Windows)
+        if: matrix.os == 'windows-latest' || matrix.os == 'windows-11-arm'
+        run: |
+          if exist "target\${{ matrix.target }}\release\${{ matrix.artifact_name }}" (
+            copy target\${{ matrix.target }}\release\${{ matrix.artifact_name }} target\${{ matrix.artifact_name }}
+          )
+        shell: cmd
 
-      # 重命名构建产物（Windows 用 copy，其他用 cp）
+      # 重命名构建产物
       - name: Rename asset (Windows)
         if: matrix.os == 'windows-latest' || matrix.os == 'windows-11-arm'
-        run: copy target\release\${{ matrix.artifact_name }} target\release\${{ matrix.asset_name }}
+        run: copy target\${{ matrix.artifact_name }} target\${{ matrix.asset_name }}
         shell: cmd
 
       - name: Rename asset (Linux/macOS)
         if: matrix.os != 'windows-latest' && matrix.os != 'windows-11-arm'
-        run: cp target/release/${{ matrix.artifact_name }} target/release/${{ matrix.asset_name }}
+        run: cp target/${{ matrix.artifact_name }} target/${{ matrix.asset_name }}
+
+      # 验证文件是否存在
+      - name: List files (debug)
+        run: ls -la target/ || dir target\
+        shell: bash
 
       # 上传附件
       - name: Upload Release Asset
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ github.ref_name }}
-          files: target/release/${{ matrix.asset_name }}
+          files: target/${{ matrix.asset_name }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
