@@ -36,6 +36,7 @@ jobs:
             artifact_name: egui-template
             asset_name: egui-template-linux-amd64
             rust_version: stable
+            needs_compiler: false
           
           # Linux ARM64
           - os: ubuntu-24.04-arm
@@ -43,6 +44,7 @@ jobs:
             artifact_name: egui-template
             asset_name: egui-template-linux-arm64
             rust_version: stable
+            needs_compiler: false
           
           # Linux x86 32-bit
           - os: ubuntu-latest
@@ -50,6 +52,9 @@ jobs:
             artifact_name: egui-template
             asset_name: egui-template-linux-x86
             rust_version: stable
+            needs_compiler: true
+            compiler_packages: gcc-multilib
+            linker: ""
           
           # Linux ARM 32-bit (ARMv7)
           - os: ubuntu-latest
@@ -57,6 +62,9 @@ jobs:
             artifact_name: egui-template
             asset_name: egui-template-linux-armv7
             rust_version: stable
+            needs_compiler: true
+            compiler_packages: gcc-arm-linux-gnueabihf
+            linker: arm-linux-gnueabihf-gcc
           
           # Windows x86_64
           - os: windows-latest
@@ -64,6 +72,7 @@ jobs:
             artifact_name: egui-template.exe
             asset_name: egui-template-windows-amd64.exe
             rust_version: 1.77.2
+            needs_compiler: false
           
           # Windows ARM64
           - os: windows-11-arm
@@ -71,6 +80,7 @@ jobs:
             artifact_name: egui-template.exe
             asset_name: egui-template-windows-arm64.exe
             rust_version: 1.77.2
+            needs_compiler: false
           
           # Windows x86 32-bit
           - os: windows-latest
@@ -78,6 +88,7 @@ jobs:
             artifact_name: egui-template.exe
             asset_name: egui-template-windows-x86.exe
             rust_version: 1.77.2
+            needs_compiler: false
           
           # macOS Intel (AMD64)
           - os: macos-13
@@ -85,6 +96,7 @@ jobs:
             artifact_name: egui-template
             asset_name: egui-template-macos-amd64
             rust_version: stable
+            needs_compiler: false
           
           # macOS ARM64 (Apple Silicon)
           - os: macos-14
@@ -92,14 +104,7 @@ jobs:
             artifact_name: egui-template
             asset_name: egui-template-macos-arm64
             rust_version: stable
-          
-          # macOS x86 32-bit (理论上macOS已不再支持32-bit，但为了完整性添加)
-          # 注意：macOS Catalina (10.15) 是最后一个支持32位应用的版本
-          # - os: macos-13
-          #   target: i686-apple-darwin
-          #   artifact_name: egui-template
-          #   asset_name: egui-template-macos-x86
-          #   rust_version: stable
+            needs_compiler: false
 
     steps:
       - name: Checkout code
@@ -109,61 +114,78 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: ${{ matrix.rust_version }}
-          targets: ${{ matrix.target }}
+          
+      # 安装目标平台
+      - name: Add target
+        run: rustup target add ${{ matrix.target }}
 
-      # 为Linux 32-bit和ARM交叉编译安装必要的依赖
-      - name: Install cross-compilation dependencies (Linux x86)
-        if: matrix.target == 'i686-unknown-linux-gnu'
+      # 安装交叉编译依赖 (Linux)
+      - name: Install cross-compilation dependencies
+        if: matrix.needs_compiler == true && runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-multilib
-          
-      - name: Install cross-compilation dependencies (Linux ARMv7)
+          sudo apt-get install -y ${{ matrix.compiler_packages }}
+          if [ -n "${{ matrix.linker }}" ]; then
+            echo "CARGO_TARGET_$(echo ${{ matrix.target }} | tr '[:lower:]' '[:upper:]' | tr '-' '_')_LINKER=${{ matrix.linker }}" >> $GITHUB_ENV
+          fi
+
+      # 显示已安装的目标（调试用）
+      - name: Show installed targets
+        run: rustup target list --installed
+
+      # 对于 Linux ARM 32-bit，可能需要设置环境变量
+      - name: Set linker for ARMv7
         if: matrix.target == 'armv7-unknown-linux-gnueabihf'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-arm-linux-gnueabihf
           echo "CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc" >> $GITHUB_ENV
+          echo "CC_armv7_unknown_linux_gnueabihf=arm-linux-gnueabihf-gcc" >> $GITHUB_ENV
+          echo "CXX_armv7_unknown_linux_gnueabihf=arm-linux-gnueabihf-g++" >> $GITHUB_ENV
 
-      # 为Windows 32-bit交叉编译安装依赖
-      - name: Install Windows 32-bit dependencies
-        if: matrix.target == 'i686-pc-windows-msvc' && matrix.os == 'windows-latest'
+      # 对于 Linux x86 32-bit，可能需要设置环境变量
+      - name: Set linker for i686
+        if: matrix.target == 'i686-unknown-linux-gnu'
         run: |
-          # Windows 32-bit 工具链通常已包含在Visual Studio中
-          echo "Building for Windows 32-bit"
+          echo "CARGO_TARGET_I686_UNKNOWN_LINUX_GNU_LINKER=gcc" >> $GITHUB_ENV
 
       - name: Build release
         run: cargo build --release --verbose --target ${{ matrix.target }}
         
-      # 处理构建产物位置（默认在 target/release 下，交叉编译在 target/<target>/release 下）
-      - name: Locate binary (Linux/macOS)
-        if: matrix.os != 'windows-latest' && matrix.os != 'windows-11-arm'
+      # 处理构建产物位置
+      - name: Locate and rename binary (Linux/macOS)
+        if: runner.os != 'Windows'
         run: |
+          # 检查交叉编译的输出目录
           if [ -f "target/${{ matrix.target }}/release/${{ matrix.artifact_name }}" ]; then
-            cp target/${{ matrix.target }}/release/${{ matrix.artifact_name }} target/${{ matrix.artifact_name }}
+            cp "target/${{ matrix.target }}/release/${{ matrix.artifact_name }}" "target/${{ matrix.asset_name }}"
+          elif [ -f "target/release/${{ matrix.artifact_name }}" ]; then
+            cp "target/release/${{ matrix.artifact_name }}" "target/${{ matrix.asset_name }}"
+          else
+            echo "Binary not found!"
+            ls -la target/ || true
+            ls -la target/${{ matrix.target }}/release/ || true
+            exit 1
           fi
           
-      - name: Locate binary (Windows)
-        if: matrix.os == 'windows-latest' || matrix.os == 'windows-11-arm'
+      - name: Locate and rename binary (Windows)
+        if: runner.os == 'Windows'
         run: |
-          if exist "target\${{ matrix.target }}\release\${{ matrix.artifact_name }}" (
-            copy target\${{ matrix.target }}\release\${{ matrix.artifact_name }} target\${{ matrix.artifact_name }}
-          )
-        shell: cmd
-
-      # 重命名构建产物
-      - name: Rename asset (Windows)
-        if: matrix.os == 'windows-latest' || matrix.os == 'windows-11-arm'
-        run: copy target\${{ matrix.artifact_name }} target\${{ matrix.asset_name }}
-        shell: cmd
-
-      - name: Rename asset (Linux/macOS)
-        if: matrix.os != 'windows-latest' && matrix.os != 'windows-11-arm'
-        run: cp target/${{ matrix.artifact_name }} target/${{ matrix.asset_name }}
+          if (Test-Path "target\${{ matrix.target }}\release\${{ matrix.artifact_name }}") {
+            Copy-Item "target\${{ matrix.target }}\release\${{ matrix.artifact_name }}" "target\${{ matrix.asset_name }}"
+          } elseif (Test-Path "target\release\${{ matrix.artifact_name }}") {
+            Copy-Item "target\release\${{ matrix.artifact_name }}" "target\${{ matrix.asset_name }}"
+          } else {
+            Write-Error "Binary not found!"
+            Get-ChildItem target\
+            exit 1
+          }
+        shell: pwsh
 
       # 验证文件是否存在
       - name: List files (debug)
-        run: ls -la target/ || dir target\
+        run: |
+          echo "=== Files in target directory ==="
+          ls -la target/ || dir target\
+          echo "=== End of file list ==="
         shell: bash
 
       # 上传附件
