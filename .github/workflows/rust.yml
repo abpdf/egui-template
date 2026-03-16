@@ -24,7 +24,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build:
-    name: Build (${{ matrix.os }} - ${{ matrix.target }})
+    name: Build (${{ matrix.target }})
     needs: create-release
     runs-on: ${{ matrix.os }}
     strategy:
@@ -90,7 +90,7 @@ jobs:
             rust_version: 1.77.2
             needs_compiler: false
           
-          # macOS Intel (AMD64)
+          # macOS Intel (AMD64) - 修正 runner 标签
           - os: macos-13
             target: x86_64-apple-darwin
             artifact_name: egui-template
@@ -103,6 +103,14 @@ jobs:
             target: aarch64-apple-darwin
             artifact_name: egui-template
             asset_name: egui-template-macos-arm64
+            rust_version: stable
+            needs_compiler: false
+          
+          # macOS Intel (AMD64) - 备用 runner (如果 macos-13 不可用)
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact_name: egui-template
+            asset_name: egui-template-macos-amd64-latest
             rust_version: stable
             needs_compiler: false
 
@@ -119,6 +127,12 @@ jobs:
       - name: Add target
         run: rustup target add ${{ matrix.target }}
 
+      # 显示 Rust 版本和目标
+      - name: Show Rust info
+        run: |
+          rustc --version
+          rustup target list --installed
+
       # 安装交叉编译依赖 (Linux)
       - name: Install cross-compilation dependencies
         if: matrix.needs_compiler == true && runner.os == 'Linux'
@@ -129,11 +143,7 @@ jobs:
             echo "CARGO_TARGET_$(echo ${{ matrix.target }} | tr '[:lower:]' '[:upper:]' | tr '-' '_')_LINKER=${{ matrix.linker }}" >> $GITHUB_ENV
           fi
 
-      # 显示已安装的目标（调试用）
-      - name: Show installed targets
-        run: rustup target list --installed
-
-      # 对于 Linux ARM 32-bit，可能需要设置环境变量
+      # 对于 Linux ARM 32-bit，设置环境变量
       - name: Set linker for ARMv7
         if: matrix.target == 'armv7-unknown-linux-gnueabihf'
         run: |
@@ -141,41 +151,64 @@ jobs:
           echo "CC_armv7_unknown_linux_gnueabihf=arm-linux-gnueabihf-gcc" >> $GITHUB_ENV
           echo "CXX_armv7_unknown_linux_gnueabihf=arm-linux-gnueabihf-g++" >> $GITHUB_ENV
 
-      # 对于 Linux x86 32-bit，可能需要设置环境变量
+      # 对于 Linux x86 32-bit，设置环境变量
       - name: Set linker for i686
         if: matrix.target == 'i686-unknown-linux-gnu'
         run: |
           echo "CARGO_TARGET_I686_UNKNOWN_LINUX_GNU_LINKER=gcc" >> $GITHUB_ENV
+          echo "CC_i686_unknown_linux_gnu=gcc" >> $GITHUB_ENV
+          echo "CXX_i686_unknown_linux_gnu=g++" >> $GITHUB_ENV
+
+      # 对于 macOS 构建，可能需要设置 SDKROOT
+      - name: Setup macOS environment
+        if: runner.os == 'macOS'
+        run: |
+          # 显示 macOS 版本信息
+          sw_vers
+          # 设置 SDKROOT（如果需要）
+          echo "SDKROOT=$(xcrun --sdk macosx --show-sdk-path)" >> $GITHUB_ENV
+          echo "MACOSX_DEPLOYMENT_TARGET=10.13" >> $GITHUB_ENV
 
       - name: Build release
         run: cargo build --release --verbose --target ${{ matrix.target }}
         
-      # 处理构建产物位置
+      # 处理构建产物位置 (Linux/macOS)
       - name: Locate and rename binary (Linux/macOS)
         if: runner.os != 'Windows'
         run: |
           # 检查交叉编译的输出目录
           if [ -f "target/${{ matrix.target }}/release/${{ matrix.artifact_name }}" ]; then
             cp "target/${{ matrix.target }}/release/${{ matrix.artifact_name }}" "target/${{ matrix.asset_name }}"
+            echo "Binary copied from target/${{ matrix.target }}/release/"
           elif [ -f "target/release/${{ matrix.artifact_name }}" ]; then
             cp "target/release/${{ matrix.artifact_name }}" "target/${{ matrix.asset_name }}"
+            echo "Binary copied from target/release/"
           else
             echo "Binary not found!"
+            echo "Searching in target directory:"
+            find target -name "${{ matrix.artifact_name }}" -type f 2>/dev/null || true
+            echo "Contents of target/:"
             ls -la target/ || true
-            ls -la target/${{ matrix.target }}/release/ || true
+            if [ -d "target/${{ matrix.target }}" ]; then
+              echo "Contents of target/${{ matrix.target }}/release/:"
+              ls -la "target/${{ matrix.target }}/release/" || true
+            fi
             exit 1
           fi
           
+      # 处理构建产物位置 (Windows)
       - name: Locate and rename binary (Windows)
         if: runner.os == 'Windows'
         run: |
           if (Test-Path "target\${{ matrix.target }}\release\${{ matrix.artifact_name }}") {
             Copy-Item "target\${{ matrix.target }}\release\${{ matrix.artifact_name }}" "target\${{ matrix.asset_name }}"
+            Write-Host "Binary copied from target\${{ matrix.target }}\release\"
           } elseif (Test-Path "target\release\${{ matrix.artifact_name }}") {
             Copy-Item "target\release\${{ matrix.artifact_name }}" "target\${{ matrix.asset_name }}"
+            Write-Host "Binary copied from target\release\"
           } else {
             Write-Error "Binary not found!"
-            Get-ChildItem target\
+            Get-ChildItem target\ -Recurse -Filter "${{ matrix.artifact_name }}"
             exit 1
           }
         shell: pwsh
@@ -188,11 +221,25 @@ jobs:
           echo "=== End of file list ==="
         shell: bash
 
+      # 计算 SHA256 校验和
+      - name: Calculate SHA256
+        run: |
+          if [ -f "target/${{ matrix.asset_name }}" ]; then
+            echo "SHA256 for ${{ matrix.asset_name }}:"
+            shasum -a 256 "target/${{ matrix.asset_name }}" | tee "target/${{ matrix.asset_name }}.sha256"
+          else
+            echo "File not found: target/${{ matrix.asset_name }}"
+            exit 1
+          fi
+        shell: bash
+
       # 上传附件
       - name: Upload Release Asset
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ github.ref_name }}
-          files: target/${{ matrix.asset_name }}
+          files: |
+            target/${{ matrix.asset_name }}
+            target/${{ matrix.asset_name }}.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
