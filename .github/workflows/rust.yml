@@ -3,7 +3,7 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'   # 当推送以 'v' 开头的标签时触发，例如 v1.0.0
+      - 'v*'
 
 jobs:
   create-release:
@@ -19,7 +19,7 @@ jobs:
           name: ${{ github.ref_name }}
           draft: false
           prerelease: false
-          generate_release_notes: true   # 自动生成 release notes（基于合并的 PR）
+          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -29,19 +29,40 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        # 同时构建 x64 和 ARM64 架构
+        os:
+          - ubuntu-latest        # x64
+          - windows-latest       # x64
+          - macos-13             # x64 (Intel)
+          - ubuntu-24.04-arm     # ARM64
+          - windows-11-arm       # ARM64
+          - macos-14             # ARM64 (Apple Silicon)
         include:
+          # x64 架构配置
           - os: ubuntu-latest
-            artifact_name: egui-template          # 构建生成的文件名
-            asset_name: egui-template-linux-amd64 # 上传后的附件名
+            artifact_name: egui-template
+            asset_name: egui-template-linux-amd64
             rust_version: stable
           - os: windows-latest
             artifact_name: egui-template.exe
             asset_name: egui-template-windows-amd64.exe
             rust_version: 1.77.2
-          - os: macos-latest
+          - os: macos-13
             artifact_name: egui-template
             asset_name: egui-template-macos-amd64
+            rust_version: stable
+          # ARM64 架构配置
+          - os: ubuntu-24.04-arm
+            artifact_name: egui-template
+            asset_name: egui-template-linux-arm64
+            rust_version: stable
+          - os: windows-11-arm
+            artifact_name: egui-template.exe
+            asset_name: egui-template-windows-arm64.exe
+            rust_version: 1.77.2   # 可根据需要改为 stable
+          - os: macos-14
+            artifact_name: egui-template
+            asset_name: egui-template-macos-arm64
             rust_version: stable
     steps:
       - name: Checkout code
@@ -55,17 +76,17 @@ jobs:
       - name: Build release
         run: cargo build --release --verbose
 
-      # 重命名构建产物为唯一的附件名（Windows 用 copy，其他用 cp）
+      # 重命名构建产物（Windows 用 copy，其他用 cp）
       - name: Rename asset (Windows)
-        if: matrix.os == 'windows-latest'
+        if: matrix.os == 'windows-latest' || matrix.os == 'windows-11-arm'
         run: copy target\release\${{ matrix.artifact_name }} target\release\${{ matrix.asset_name }}
         shell: cmd
 
       - name: Rename asset (Linux/macOS)
-        if: matrix.os != 'windows-latest'
+        if: matrix.os != 'windows-latest' && matrix.os != 'windows-11-arm'
         run: cp target/release/${{ matrix.artifact_name }} target/release/${{ matrix.asset_name }}
 
-      # 上传重命名后的文件（使用 tag_name 定位 release）
+      # 上传附件
       - name: Upload Release Asset
         uses: softprops/action-gh-release@v1
         with:
